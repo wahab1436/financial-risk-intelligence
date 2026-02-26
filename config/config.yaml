@@ -1,0 +1,82 @@
+system:
+  name: "Financial Risk Intelligence System"
+  version: "1.0.0"
+  random_seed: 42
+
+data:
+  assets:
+    - SPY
+    - QQQ
+    - BTC-USD
+    - "^VIX"
+  start_date: "2015-01-01"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  features_dir: "data/features"
+  db_url: "postgresql://user:password@localhost:5432/risk_db"
+  news_table: "news_headlines"
+
+validation:
+  max_return_zscore: 5.0
+  max_null_pct: 0.05
+  min_trading_days_per_year: 240
+
+features:
+  rolling_windows: [7, 14, 30, 60]
+  rsi_period: 14
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  atr_period: 14
+  beta_window: 60
+  lag: 1
+
+regime:
+  n_states: 3
+  n_iter: 1000
+  covariance_type: "full"
+  model: "hmm"
+
+volatility:
+  forecast_horizon: 7
+  garch_p: 1
+  garch_q: 1
+  xgboost:
+    n_estimators: 500
+    learning_rate: 0.05
+    max_depth: 5
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+  walk_forward_min_train_days: 504
+
+sentiment:
+  model_name: "ProsusAI/finbert"
+  batch_size: 32
+  max_length: 128
+  aggregation: "weighted_mean"
+
+risk_score:
+  weights:
+    volatility: 0.35
+    regime: 0.30
+    sentiment: 0.20
+    drawdown: 0.15
+  regime_encoding:
+    bear: 1.0
+    high_vol: 0.8
+    sideways: 0.4
+    bull: 0.1
+  normalization_window: 504
+
+llm:
+  model: "gpt-4o"
+  max_tokens: 1500
+  temperature: 0.3
+  reports_dir: "llm_reports/reports"
+
+monitoring:
+  ks_pvalue_threshold: 0.05
+  regime_freq_change_threshold: 0.30
+  log_dir: "monitoring/logs"
+  mlflow_tracking_uri: "mlflow_runs"
