@@ -1,6 +1,3 @@
-# Install repo itself as a package so all imports resolve on Streamlit Cloud
--e .
-
 # Data
 pandas>=2.2.0
 numpy>=1.26.0
