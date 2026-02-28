@@ -1,22 +1,12 @@
-"""
-app.py  —  Root-level Streamlit entry point.
-
-Streamlit Cloud:  set Main file path = app.py
-Local:            streamlit run app.py
-
-Architecture:
-  - Imports all dashboard components from dashboard/components/
-  - Imports backend modules for live pipeline triggers
-  - Reads stored predictions from data/predictions/ for display
-  - Can re-run the full pipeline from the sidebar
-"""
-
 import sys
-from pathlib import Path
+import os
 
-# ── Add repo root to sys.path so all submodule imports resolve ────────────────
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
+# Must be first — before any local imports
+# Streamlit Cloud runs from /mount/src/financial-risk-intelligence/
+# This guarantees the repo root is always on sys.path
+_root = os.path.dirname(os.path.abspath(__file__))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
 
 import json
 import math
@@ -28,7 +18,7 @@ import pandas as pd
 import streamlit as st
 import yaml
 
-# ── Dashboard components ──────────────────────────────────────────────────────
+# Dashboard components
 from dashboard.components import market_overview
 from dashboard.components import regime_timeline
 from dashboard.components import volatility_forecast
@@ -36,27 +26,28 @@ from dashboard.components import sentiment_dashboard
 from dashboard.components import risk_monitor
 from dashboard.components import report_interface
 
-# ── Backend: data pipeline ────────────────────────────────────────────────────
+# Backend: data pipeline
 from data_pipeline.ingestion import MarketDataIngester, NewsIngester
 from data_pipeline.validation import validate_all
 from data_pipeline.preprocessing import MarketDataPreprocessor
 
-# ── Backend: feature engineering ─────────────────────────────────────────────
+# Backend: feature engineering
 from feature_engineering.market_features import MarketFeatureEngineer
 from feature_engineering.sentiment_features import FinBERTSentimentPipeline
 from feature_engineering.feature_store import FeatureStore
 
-# ── Backend: models ───────────────────────────────────────────────────────────
+# Backend: models
 from models.regime_model import RegimeDetector
 from models.volatility_model import XGBoostVolatilityModel
 
-# ── Backend: risk engine ──────────────────────────────────────────────────────
+# Backend: risk engine
 from risk_engine.risk_calculator import RiskScoreCalculator
 
-# ── Backend: monitoring ───────────────────────────────────────────────────────
+# Backend: monitoring
 from monitoring.logging_utils import configure_logging, PredictionLogger
 
-# ─────────────────────────────────────────────────────────────────────────────
+from pathlib import Path
+ROOT = Path(_root)
 
 st.set_page_config(
     page_title="Financial Risk Intelligence",
@@ -86,7 +77,6 @@ def asset_safe(asset: str) -> str:
 
 
 def load_asset_data(cfg: dict, asset: str) -> dict:
-    """Load all stored artefacts for one asset from data/predictions/."""
     s    = asset_safe(asset)
     pdir = cfg["data"]["predictions_dir"]
     fdir = cfg["data"]["features_dir"]
@@ -117,22 +107,16 @@ def load_asset_data(cfg: dict, asset: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Backend pipeline — triggered from sidebar
+# Backend pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_pipeline(cfg: dict, assets: list[str], skip_news: bool = True) -> bool:
-    """
-    Full pipeline: ingest -> validate -> preprocess -> features ->
-    regime -> volatility -> risk scores.
-    Mirrors run_pipeline.py exactly so both entry points stay in sync.
-    """
+def run_pipeline(cfg: dict, assets: list, skip_news: bool = True) -> bool:
     try:
         configure_logging(cfg["monitoring"]["log_dir"])
         pdir = ROOT / cfg["data"]["predictions_dir"]
         pdir.mkdir(parents=True, exist_ok=True)
         pred_logger = PredictionLogger(cfg)
 
-        # 1 — Ingest
         with st.spinner("Fetching market data from Yahoo Finance..."):
             raw = MarketDataIngester(cfg).run(assets)
         if not raw:
@@ -146,30 +130,27 @@ def run_pipeline(cfg: dict, assets: list[str], skip_news: bool = True) -> bool:
                 except Exception as e:
                     st.warning(f"News ingestion skipped: {e}")
 
-        # 2 — Validate
         with st.spinner("Validating data quality..."):
             val_results = validate_all(raw, cfg)
             failed = {a for a, r in val_results.items() if not r.passed}
             if failed:
-                st.warning(f"Excluded assets (validation failed): {failed}")
+                st.warning(f"Excluded (validation failed): {failed}")
                 for a in failed:
                     raw.pop(a, None)
         if not raw:
             st.error("All assets failed validation.")
             return False
 
-        # 3 — Preprocess
         with st.spinner("Preprocessing..."):
             processed = MarketDataPreprocessor(cfg).run(raw)
 
         vix_df = processed.get("^VIX")
         spy_df = processed.get("SPY")
 
-        # 4 — Feature engineering
         eng       = MarketFeatureEngineer(cfg)
         store     = FeatureStore(cfg)
         sent_pipe = FinBERTSentimentPipeline(cfg)
-        all_feats: dict[str, pd.DataFrame] = {}
+        all_feats = {}
 
         for asset, df in processed.items():
             with st.spinner(f"Engineering features: {asset}..."):
@@ -190,7 +171,6 @@ def run_pipeline(cfg: dict, assets: list[str], skip_news: bool = True) -> bool:
                 store.save(feats, asset, "market")
                 all_feats[asset] = feats
 
-        # 5 — Regime detection
         primary = next(
             (a for a in ["SPY", "QQQ"] if a in all_feats),
             list(all_feats.keys())[0],
@@ -200,7 +180,7 @@ def run_pipeline(cfg: dict, assets: list[str], skip_news: bool = True) -> bool:
             detector.fit(all_feats[primary])
             detector.save(str(pdir / "regime_model.pkl"))
 
-        all_regime_labels: dict[str, pd.Series] = {}
+        all_regime_labels = {}
         for asset, feats in all_feats.items():
             labels = detector.predict_labels(feats)
             all_regime_labels[asset] = labels
@@ -208,7 +188,6 @@ def run_pipeline(cfg: dict, assets: list[str], skip_news: bool = True) -> bool:
                 pdir / f"{asset_safe(asset)}_regimes.parquet"
             )
 
-        # 6 — Volatility forecasting
         vol_model = XGBoostVolatilityModel(cfg)
         for asset, feats in all_feats.items():
             if asset == "^VIX":
@@ -228,7 +207,6 @@ def run_pipeline(cfg: dict, assets: list[str], skip_news: bool = True) -> bool:
                     st.warning(f"{asset}: walk-forward skipped — {e}")
         vol_model.save(str(pdir / "vol_model.pkl"))
 
-        # 7 — Risk scoring
         risk_calc = RiskScoreCalculator(cfg)
         for asset, feats in all_feats.items():
             if asset == "^VIX":
@@ -264,11 +242,11 @@ def run_pipeline(cfg: dict, assets: list[str], skip_news: bool = True) -> bool:
                 )
                 risk_df.to_parquet(pdir / f"{asset_safe(asset)}_risk_scores.parquet")
                 pred_logger.log(
-                    asset        = asset,
-                    model_name   = "composite_risk",
-                    model_version= cfg["system"]["version"],
-                    input_summary= {"n_features": len(feats.columns), "n_rows": len(feats)},
-                    prediction   = risk_calc.latest_risk_payload(risk_df),
+                    asset         = asset,
+                    model_name    = "composite_risk",
+                    model_version = cfg["system"]["version"],
+                    input_summary = {"n_features": len(feats.columns), "n_rows": len(feats)},
+                    prediction    = risk_calc.latest_risk_payload(risk_df),
                 )
 
         st.cache_data.clear()
@@ -284,7 +262,7 @@ def run_pipeline(cfg: dict, assets: list[str], skip_news: bool = True) -> bool:
 # Sidebar
 # ─────────────────────────────────────────────────────────────────────────────
 
-def sidebar(cfg: dict) -> tuple[str, str]:
+def sidebar(cfg: dict) -> tuple:
     st.sidebar.title("Risk Intelligence")
     st.sidebar.markdown("---")
 
@@ -318,7 +296,6 @@ def sidebar(cfg: dict) -> tuple[str, str]:
             else:
                 st.sidebar.error("Pipeline failed. See errors above.")
 
-    # Last run timestamp
     st.sidebar.markdown("---")
     s         = asset_safe(asset)
     risk_path = ROOT / cfg["data"]["predictions_dir"] / f"{s}_risk_scores.parquet"
