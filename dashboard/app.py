@@ -1,15 +1,22 @@
 """
 dashboard/app.py
 
-Streamlit dashboard for the Financial Risk Intelligence System.
-Reads from stored predictions and reports — never recomputes models live.
+Streamlit dashboard — reads ONLY from stored predictions. Never reruns models live.
+
+Run with:
+    streamlit run dashboard/app.py
 """
 
-import json
+import sys
 from pathlib import Path
 
+# Add repo root to sys.path so all backend modules resolve correctly
+# whether running locally or on Streamlit Cloud
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
@@ -17,131 +24,93 @@ from dashboard.components import (
     market_overview,
     regime_timeline,
     risk_monitor,
+    report_interface,
     sentiment_dashboard,
     volatility_forecast,
-    report_interface,
 )
 
 st.set_page_config(
     page_title="Financial Risk Intelligence",
-    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 
 @st.cache_data(ttl=300)
-def load_config() -> dict:
-    with open("config/config.yaml") as f:
+def _load_config() -> dict:
+    # Always resolve config relative to repo root, not cwd
+    config_path = ROOT / "config" / "config.yaml"
+    with open(config_path) as f:
         return yaml.safe_load(f)
 
 
 @st.cache_data(ttl=300)
-def load_processed_data(asset: str, cfg: dict) -> pd.DataFrame:
-    """Load the processed OHLCV data for the selected asset."""
-    safe = asset.replace("^", "").replace("-", "_")
-    path = Path(cfg["data"]["processed_dir"]) / f"{safe}_processed.parquet"
-    if not path.exists():
+def _load_parquet(path: str) -> pd.DataFrame:
+    p = ROOT / path
+    if not p.exists():
         return pd.DataFrame()
-    return pd.read_parquet(path)
+    return pd.read_parquet(p)
 
 
-@st.cache_data(ttl=300)
-def load_features(asset: str, cfg: dict) -> pd.DataFrame:
-    safe = asset.replace("^", "").replace("-", "_")
-    features_dir = Path(cfg["data"]["features_dir"])
-    files = sorted(features_dir.glob(f"{safe}_market_*.parquet"))
-    if not files:
-        return pd.DataFrame()
-    return pd.read_parquet(files[-1])
-
-
-@st.cache_data(ttl=300)
-def load_risk_scores(asset: str) -> pd.DataFrame:
-    safe = asset.replace("^", "").replace("-", "_")
-    path = Path("data/predictions") / f"{safe}_risk_scores.parquet"
-    if not path.exists():
-        return pd.DataFrame()
-    return pd.read_parquet(path)
-
-
-@st.cache_data(ttl=300)
-def load_vol_predictions(asset: str) -> pd.DataFrame:
-    safe = asset.replace("^", "").replace("-", "_")
-    path = Path("data/predictions") / f"{safe}_vol_predictions.parquet"
-    if not path.exists():
-        return pd.DataFrame()
-    return pd.read_parquet(path)
-
-
-@st.cache_data(ttl=300)
-def load_regime_labels(asset: str) -> pd.Series:
-    safe = asset.replace("^", "").replace("-", "_")
-    path = Path("data/predictions") / f"{safe}_regimes.parquet"
-    if not path.exists():
-        return pd.Series(dtype=str)
-    df = pd.read_parquet(path)
-    return df.iloc[:, 0]
+def _safe(asset: str) -> str:
+    return asset.replace("^", "").replace("-", "_")
 
 
 def sidebar(cfg: dict) -> tuple[str, str]:
-    """Render sidebar controls and return selected asset and view."""
-    st.sidebar.title("Financial Risk Intelligence")
+    st.sidebar.title("Risk Intelligence")
     st.sidebar.markdown("---")
-
-    asset = st.sidebar.selectbox(
-        "Select Asset",
-        options=cfg["data"]["assets"],
-        index=0,
-    )
-
-    view = st.sidebar.radio(
-        "View",
-        options=[
-            "Market Overview",
-            "Regime Timeline",
-            "Volatility Forecast",
-            "Sentiment Dashboard",
-            "Risk Monitor",
-            "Report Interface",
-        ],
-    )
-
+    asset = st.sidebar.selectbox("Asset", cfg["data"]["assets"])
+    view  = st.sidebar.radio("View", [
+        "Market Overview",
+        "Regime Timeline",
+        "Volatility Forecast",
+        "Sentiment Dashboard",
+        "Risk Monitor",
+        "Report Interface",
+    ])
     st.sidebar.markdown("---")
-    st.sidebar.caption(f"System: {cfg['system']['name']} v{cfg['system']['version']}")
-    st.sidebar.caption("Dashboard reads stored predictions only.")
+    st.sidebar.caption(f"{cfg['system']['name']}  v{cfg['system']['version']}")
     return asset, view
 
 
-def main():
-    cfg = load_config()
+def main() -> None:
+    cfg        = _load_config()
     asset, view = sidebar(cfg)
+    safe       = _safe(asset)
+    pdir       = cfg["data"]["predictions_dir"]
+    fdir       = cfg["data"]["features_dir"]
+    proc_dir   = cfg["data"]["processed_dir"]
 
-    # Load data for selected asset
-    price_df = load_processed_data(asset, cfg)
-    features_df = load_features(asset, cfg)
-    risk_df = load_risk_scores(asset)
-    vol_df = load_vol_predictions(asset)
-    regime_labels = load_regime_labels(asset)
+    # Load stored data — missing files return empty DataFrames gracefully
+    price_df = _load_parquet(f"{proc_dir}/{safe}_processed.parquet")
+    risk_df  = _load_parquet(f"{pdir}/{safe}_risk_scores.parquet")
+    vol_df   = _load_parquet(f"{pdir}/{safe}_vol_predictions.parquet")
 
-    st.title(f"{view} — {asset}")
+    # Latest feature file for this asset
+    feat_dir   = ROOT / fdir
+    feat_files = sorted(feat_dir.glob(f"{safe}_market_*.parquet")) if feat_dir.exists() else []
+    feats_df   = pd.read_parquet(feat_files[-1]) if feat_files else pd.DataFrame()
+
+    # Regime labels
+    regime_path = ROOT / pdir / f"{safe}_regimes.parquet"
+    if regime_path.exists():
+        regime_labels = pd.read_parquet(regime_path).iloc[:, 0]
+    else:
+        regime_labels = pd.Series(dtype=str)
+
+    st.title(f"{view}  —  {asset}")
     st.markdown("---")
 
     if view == "Market Overview":
         market_overview.render(price_df, asset)
-
     elif view == "Regime Timeline":
         regime_timeline.render(price_df, regime_labels, asset)
-
     elif view == "Volatility Forecast":
         volatility_forecast.render(vol_df, asset)
-
     elif view == "Sentiment Dashboard":
-        sentiment_dashboard.render(features_df, asset)
-
+        sentiment_dashboard.render(feats_df, asset)
     elif view == "Risk Monitor":
         risk_monitor.render(risk_df, asset)
-
     elif view == "Report Interface":
         report_interface.render(asset, cfg)
 
