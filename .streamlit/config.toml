@@ -2,4 +2,4 @@
 headless = true
 
 [runner]
-magicEnabled = false
+pythonPath = ["/mount/src/financial-risk-intelligence"]
