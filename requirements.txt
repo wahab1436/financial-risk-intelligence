@@ -1,3 +1,6 @@
+# Install the repo as a package — makes all submodules importable on Streamlit Cloud
+-e .
+
 # Data
 pandas>=2.2.0
 numpy>=1.26.0
