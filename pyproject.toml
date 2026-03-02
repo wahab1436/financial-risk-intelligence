@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "financial-risk-intelligence"
+version = "1.0.0"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "data_pipeline*",
+    "feature_engineering*",
+    "models*",
+    "risk_engine*",
+    "llm_reports*",
+    "dashboard*",
+    "monitoring*",
+    "scripts*",
+]
