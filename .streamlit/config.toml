@@ -1,5 +1,14 @@
-[server]
-headless = true
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[runner]
-pythonPath = ["/mount/src/financial-risk-intelligence"]
+[project]
+name = "financial-risk-intelligence"
+version = "1.0.0"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["data_pipeline*", "feature_engineering*", "models*",
+           "risk_engine*", "llm_reports*", "dashboard*",
+           "monitoring*", "scripts*"]
